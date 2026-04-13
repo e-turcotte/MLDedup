@@ -898,10 +898,28 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
       }
       logger.info("=" * 50)
 
-      // Choose which module to deduplicate by rank (0 = no dedup, 1-10 = dedup that ranked module)
+      val originalIRSize = sg.validNodes.size
+
+      // Choose which module to deduplicate
       val numModules = modDedupBenefitsSorted.size
       val rankFromResource = EssentEmitter.readDedupRankFromResource()
-      val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (rankFromResource == 0 || numModules == 0) {
+      val benefitSortedNames = modDedupBenefitsSorted.map(_._1)
+
+      val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (opt.mlRank) {
+        val coeffs = MLRankModel.loadCoefficients().getOrElse(
+          throw new RuntimeException("--ml-rank requires coefficients in META-INF/ml-rank-coefficients.csv"))
+        val candidateNames = benefitSortedNames.filter(m => modInstanceCount(m) > 1)
+        if (candidateNames.isEmpty) {
+          ("", Seq.empty[String], 0, 0)
+        } else {
+          val (bestMod, pseudoRank) = MLRankModel.selectBestModule(
+            candidateNames, modInstInfo, sg, originalIRSize, coeffs, benefitSortedNames)
+          val insts = modInstInfo.allModInstanceTable(bestMod)
+          val benefit = modDedupBenefits(bestMod)
+          logger.info(s"ML model selected module [$bestMod] (pseudo-rank $pseudoRank)")
+          (bestMod, insts, benefit, pseudoRank)
+        }
+      } else if (rankFromResource == 0 || numModules == 0) {
         ("", Seq.empty[String], 0, 0)
       } else {
         val rank = (rankFromResource max 1 min 10 min numModules)
@@ -911,8 +929,6 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
         val benefit = modDedupBenefitsSorted(idx)._2
         (mod, insts, benefit, rank)
       }
-
-      val originalIRSize = sg.validNodes.size
       if (dedupMod.nonEmpty) {
         logger.info(s"Deduplicate module [${dedupMod}] (rank $rankUsed), ideal benefit (num IR nodes) ${dedupBenefit} (-${dedupBenefit.toFloat * 100 / originalIRSize}%)")
         logger.info(s"Original design has ${originalIRSize} IR nodes")

@@ -18,6 +18,7 @@ case class OptFlags(
     trackExts: Boolean = false,
     partStats: Boolean = false,
     dedup: Boolean = false,
+    mlRank: Boolean = false,
     genRegDump: Boolean = false,
     partCutoff: Int = 8,
     withVCD: Boolean = false,
@@ -110,6 +111,10 @@ class ArgsParser {
     opt[Int]("part-cutoff").action( (x, c) => c.copy(
         partCutoff = x)
     ).text("parameter used for partitioning")
+
+    opt[Unit]("ml-rank").action( (_, c) => c.copy(
+        mlRank = true, dedup = true, useCondParts = true)
+    ).text("use ML model to select dedup module (ignores baked-in rank)")
 
     opt[Unit]("withVCD").abbr("withVCD").action( (_, c) => c.copy(
         removeFlatConnects = false,
