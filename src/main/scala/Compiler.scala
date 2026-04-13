@@ -1,6 +1,8 @@
 package essent
 
 import java.io.{File, FileWriter, Writer}
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import essent.Emitter._
 import essent.Extract._
 import essent.ir._
@@ -17,7 +19,21 @@ import essent.Graph.NodeID
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
 
+object EssentEmitter {
+  /** Read baked-in dedup rank from resource (1-based). Used to build essent-1.jar .. essent-10.jar. */
+  def readDedupRankFromResource(): Int = {
+    val path = "META-INF/essent-dedup-rank"
+    Option(getClass.getClassLoader.getResourceAsStream(path)).flatMap { in =>
+      try {
+        val s = Source.fromInputStream(in).mkString.trim
+        in.close()
+        Some(s.toInt)
+      } catch { case _: Throwable => None }
+    }.getOrElse(1)
+  }
+}
 
 class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends LazyLogging {
   val flagVarName = "PARTflags"
@@ -875,28 +891,36 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
       // Report benefits
       logger.info("=" * 50)
       logger.info("Module Name, Num of Instances, Dedup Benefits")
-      for (i <- 0 to Seq(5, modDedupBenefitsSorted.size).min) {
+      for (i <- 0 until Math.min(6, modDedupBenefitsSorted.size)) {
         val modName = modDedupBenefitsSorted(i)._1
         val modDedupBenefit = modDedupBenefitsSorted(i)._2
         logger.info(s"${modName}, ${modInstanceCount(modName)}, ${modDedupBenefit}")
       }
       logger.info("=" * 50)
 
-      // Choose which module to deduplicate (most benefit)
-      val dedupMod = modDedupBenefitsSorted.head._1
-      val dedupInstances = modInstInfo.allModInstanceTable(dedupMod)
+      // Choose which module to deduplicate by rank (0 = no dedup, 1-10 = dedup that ranked module)
+      val numModules = modDedupBenefitsSorted.size
+      val rankFromResource = EssentEmitter.readDedupRankFromResource()
+      val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (rankFromResource == 0 || numModules == 0) {
+        ("", Seq.empty[String], 0, 0)
+      } else {
+        val rank = (rankFromResource max 1 min 10 min numModules)
+        val idx = rank - 1
+        val mod = modDedupBenefitsSorted(idx)._1
+        val insts = modInstInfo.allModInstanceTable(mod)
+        val benefit = modDedupBenefitsSorted(idx)._2
+        (mod, insts, benefit, rank)
+      }
 
-      val dedupBenefit = modDedupBenefitsSorted.head._2
       val originalIRSize = sg.validNodes.size
-      logger.info(s"Deduplicate module [${dedupMod}], ideal benefit (num IR nodes) ${dedupBenefit} (-${dedupBenefit.toFloat * 100 / originalIRSize}%)")
-      logger.info(s"Original design has ${originalIRSize} IR nodes")
-      logger.info(s"Dedup instances: ${dedupInstances}")
-
+      if (dedupMod.nonEmpty) {
+        logger.info(s"Deduplicate module [${dedupMod}] (rank $rankUsed), ideal benefit (num IR nodes) ${dedupBenefit} (-${dedupBenefit.toFloat * 100 / originalIRSize}%)")
+        logger.info(s"Original design has ${originalIRSize} IR nodes")
+        logger.info(s"Dedup instances: ${dedupInstances}")
+      }
 
       val stopTime = System.currentTimeMillis()
       logger.info(s"Took ${stopTime - startTime} ms to find proper dedup module")
-
-
 
       if (dedupInstances.size <= 1) {
         println("Input circuit contains no duplicated modules!")
@@ -905,6 +929,37 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
         logger.info("Start working on dedup optimization")
         dedupCPInfo = Some(condPartWorker.doOptForDedup(opt.partCutoff, dedupInstances, modInstInfo))
       }
+
+      // --- Dedup telemetry CSV sidecar ---
+      val designName = Option(opt.firInputFile.getParentFile).map(_.getName).getOrElse(topName)
+      val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+      val csvFile = new File(opt.outputDir, "dedup_features.csv")
+      val csvWriter = new FileWriter(csvFile)
+      val csvHeader = "timestamp,design,rank,dedup_module,original_ir_size,instance_count,module_ir_size,boundary_signal_count,boundary_to_interior_ratio,edge_count_within,fraction_design_covered"
+      csvWriter.write(csvHeader + "\n")
+
+      if (dedupMod.nonEmpty && dedupInstances.size > 1) {
+        val instanceCount = modInstanceCount(dedupMod)
+        val moduleIRSize = modInstInfo.internalModIRSize(dedupMod)
+        val fractionDesignCovered = (instanceCount * moduleIRSize).toDouble / originalIRSize
+
+        val dedupNodeSet = modInstInfo.instInclusiveNodesTable(dedupInstances.head).toSet
+        val edgeCountWithin = dedupNodeSet.toSeq.map { nid =>
+          sg.outNeigh(nid).count(dedupNodeSet.contains)
+        }.sum
+
+        val boundarySignalCount = dedupCPInfo match {
+          case Some(info) => info.mainDedupInstBoundarySignals.size
+          case None => 0
+        }
+        val boundaryToInteriorRatio = boundarySignalCount.toDouble / originalIRSize
+
+        csvWriter.write(s"${timestamp},${designName},${rankUsed},${dedupMod},${originalIRSize},${instanceCount},${moduleIRSize},${boundarySignalCount},${boundaryToInteriorRatio},${edgeCountWithin},${fractionDesignCovered}\n")
+      } else {
+        csvWriter.write(s"${timestamp},${designName},${rankUsed},,${originalIRSize},0,0,0,0.0,0,0.0\n")
+      }
+      csvWriter.close()
+      logger.info(s"Wrote dedup features CSV to ${csvFile.getAbsolutePath}")
 
     } else {
       if (opt.regUpdates)
