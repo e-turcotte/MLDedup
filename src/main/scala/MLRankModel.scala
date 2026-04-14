@@ -30,6 +30,11 @@ object MLRankModel extends LazyLogging {
   private val ResourcePath = "META-INF/ml-rank-coefficients.csv"
   private val NumFeatures = 7
 
+  /** 
+   * Load the coefficients from the resource CSV file.
+   * The first row is the header, the second row is the coefficients.
+   * @return The coefficients as an array of doubles.
+   */
   def loadCoefficients(): Option[Array[Double]] = {
     Option(getClass.getClassLoader.getResourceAsStream(ResourcePath)).flatMap { in =>
       try {
@@ -55,6 +60,12 @@ object MLRankModel extends LazyLogging {
     }
   }
 
+  /**
+   * Predict the speedup of a module using the coefficients.
+   * @param coeffs The coefficients as an array of doubles, derived from the loadCoefficients() method.
+   * @param features The features of the module, derived from the computeFeatures() method.
+   * @return The predicted speedup as a double.
+   */
   def predict(coeffs: Array[Double], features: ModuleFeatures): Double = {
     val intercept = coeffs(0)
     val featureArray = features.toArray
@@ -67,8 +78,11 @@ object MLRankModel extends LazyLogging {
 
   /**
    * Compute features for a candidate module using pre-dedup graph structure.
-   * boundarySignalCount is approximated as the number of edges crossing the
-   * instance boundary (one endpoint inside instInclusiveNodesTable, other outside).
+   * @param modName The name of the module.
+   * @param modInstInfo The module instance information, derived from the ModuleInstanceInfo class.
+   * @param sg The statement graph, derived from the StatementGraph class.
+   * @param originalIRSize The original IR size of the design.
+   * @return The features of the module as a ModuleFeatures object.
    */
   def computeFeatures(
     modName: String,
@@ -109,6 +123,13 @@ object MLRankModel extends LazyLogging {
    * Score all candidate modules and return (bestModuleName, pseudoRank).
    * pseudoRank is the 1-based position of the selected module in the
    * original benefit-sorted list.
+   * @param candidates The candidate modules to score.
+   * @param modInstInfo The module instance information, derived from the ModuleInstanceInfo class.
+   * @param sg The statement graph, derived from the StatementGraph class.
+   * @param originalIRSize The original IR size of the design.
+   * @param coeffs The coefficients as an array of doubles, derived from the loadCoefficients() method.
+   * @param benefitSortedNames The original benefit-sorted list of module names.
+   * @return The best module name and its pseudo-rank.
    */
   def selectBestModule(
     candidates: Seq[String],

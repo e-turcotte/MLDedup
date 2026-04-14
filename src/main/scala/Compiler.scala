@@ -880,7 +880,6 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
       val modInstInfo = new ModuleInstanceInfo(circuit, annotations, sg)
 
       // Determine which mod/insts to dedup
-      // Note: Currently only dedup 1 mod
       // 1. Find out num of instances of each module
       val modInstanceCount = modInstInfo.internalModInstanceTable.map{ case (modName, insts) => modName -> insts.size}
       // 2. Find out reduction of [#IR nodes] as dedup benefits
@@ -900,11 +899,12 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
 
       val originalIRSize = sg.validNodes.size
 
-      // Choose which module to deduplicate
+      // Choose which modules to deduplicate
       val numModules = modDedupBenefitsSorted.size
       val rankFromResource = EssentEmitter.readDedupRankFromResource()
       val benefitSortedNames = modDedupBenefitsSorted.map(_._1)
 
+      // Our ML Rank Model call (if enabled by user flag)
       val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (opt.mlRank) {
         val coeffs = MLRankModel.loadCoefficients().getOrElse(
           throw new RuntimeException("--ml-rank requires coefficients in META-INF/ml-rank-coefficients.csv"))
@@ -920,8 +920,10 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
           (bestMod, insts, benefit, pseudoRank)
         }
       } else if (rankFromResource == 0 || numModules == 0) {
+        // Don't deduplicate if given rank from resource files 0 or no modules to deduplicate
         ("", Seq.empty[String], 0, 0)
       } else {
+        // Use given rank from resource file - used for generating training dataset.
         val rank = (rankFromResource max 1 min 10 min numModules)
         val idx = rank - 1
         val mod = modDedupBenefitsSorted(idx)._1
@@ -946,7 +948,7 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
         dedupCPInfo = Some(condPartWorker.doOptForDedup(opt.partCutoff, dedupInstances, modInstInfo))
       }
 
-      // --- Dedup telemetry CSV sidecar ---
+      // --- Dedup telemetry CSV Formatter ---
       val designName = Option(opt.firInputFile.getParentFile).map(_.getName).getOrElse(topName)
       val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
       val csvFile = new File(opt.outputDir, "dedup_features.csv")
