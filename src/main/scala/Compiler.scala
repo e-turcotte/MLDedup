@@ -22,7 +22,13 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
 object EssentEmitter {
-  /** Read baked-in dedup rank from resource (1-based). Used to build essent-1.jar .. essent-10.jar. */
+  /**
+   * Read which candidate module to deduplicate when `--ml-rank` is off.
+   * The list `modDedupBenefitsSorted` is ordered by static IR-reduction benefit; rank 1 is the
+   * greediest choice. Values 1–10 pick that position (clamped to available modules). Value 0 means
+   * "do not deduplicate" — useful for baseline runs or tooling that sweeps ranks to build
+   * `regression_dataset.csv`. JAR variants (essent-1 … essent-10) bake different integers here.
+   */
   def readDedupRankFromResource(): Int = {
     val path = "META-INF/essent-dedup-rank"
     Option(getClass.getClassLoader.getResourceAsStream(path)).flatMap { in =>
@@ -899,12 +905,14 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
 
       val originalIRSize = sg.validNodes.size
 
-      // Choose which modules to deduplicate
+      // Choose which single module to deduplicate (compiler still dedups one module per run).
       val numModules = modDedupBenefitsSorted.size
       val rankFromResource = EssentEmitter.readDedupRankFromResource()
       val benefitSortedNames = modDedupBenefitsSorted.map(_._1)
 
-      // Our ML Rank Model call (if enabled by user flag)
+      // Three modes: (1) `--ml-rank` scores every multiply-instantiated module with a linear model
+      // over graph features and picks the max; (2) resource rank 0 skips dedup; (3) otherwise use
+      // baked-in rank 1–10 for reproducible sweeps / training-data collection.
       val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (opt.mlRank) {
         val coeffs = MLRankModel.loadCoefficients().getOrElse(
           throw new RuntimeException("--ml-rank requires coefficients in META-INF/ml-rank-coefficients.csv"))
@@ -948,7 +956,8 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
         dedupCPInfo = Some(condPartWorker.doOptForDedup(opt.partCutoff, dedupInstances, modInstInfo))
       }
 
-      // --- Dedup telemetry CSV Formatter ---
+      // Append one row per compile for offline ML: features align with Python FEATURE_COLS + labels
+      // from simulation (see model/regression_dataset.csv). Enables retraining coefficients.
       val designName = Option(opt.firInputFile.getParentFile).map(_.getName).getOrElse(topName)
       val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
       val csvFile = new File(opt.outputDir, "dedup_features.csv")

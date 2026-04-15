@@ -35,6 +35,7 @@ def dummy_baseline_mae(X, y):
 # ---------------------------------------------------------------------------
 
 def ndcg_at_k(true_order, pred_order, k=1):
+    """Top-k overlap between true and predicted orderings; for k=1 this is hit@1 (1 or 0)."""
     return len(set(true_order[:k]) & set(pred_order[:k])) / k
 
 

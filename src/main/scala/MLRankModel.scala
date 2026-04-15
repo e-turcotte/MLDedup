@@ -101,6 +101,8 @@ object MLRankModel extends LazyLogging {
       sg.outNeigh(nid).count(instanceNodeSet.contains)
     }.sum
 
+    // A statement-graph node is "boundary" if it has an edge to/from outside the instance's
+    // subgraph — proxy for cross-instance coupling cost before any dedup transform is applied.
     val boundarySignalCount = instanceNodeSet.toSeq.count { nid =>
       sg.outNeigh(nid).exists(!instanceNodeSet.contains(_)) ||
       sg.inNeigh(nid).exists(!instanceNodeSet.contains(_))
