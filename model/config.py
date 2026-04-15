@@ -8,6 +8,8 @@ FEATURE_COLS = [
     "original_ir_size",
 ]
 
+# Groups for training dataset - determines cross-validation rows
 GROUP_COLS = ["design", "benchmark", "parallel_cpus"]
 
+# Target column for training dataset - determines the target variable
 TARGET_COL = "relative_speedup"

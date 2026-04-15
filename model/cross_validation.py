@@ -8,12 +8,7 @@ from scipy.stats import kendalltau
 
 
 def regression_cv(X, y, groups=None):
-    """Run grouped or plain k-fold CV with regression scoring.
-
-    Returns ``None`` if there are too few samples/groups, otherwise a dict
-    with arrays ``r2``, ``mae``, ``rmse`` (one value per fold).
-    Also returns a ``description`` string for display purposes.
-    """
+    """Run grouped or plain k-fold CV with regression scoring."""
     n_samples = len(y)
     n_groups = groups.nunique() if groups is not None else 0
 
@@ -57,11 +52,7 @@ def regression_cv(X, y, groups=None):
 
 
 def ranking_cv_leave_one_design_out(df, feature_cols, group_cols):
-    """Leave-one-design-out CV evaluated with ranking metrics.
-
-    Returns ``None`` if fewer than 2 designs are present, otherwise a dict
-    with arrays ``ndcg1_scores`` and ``tau_scores`` plus their means.
-    """
+    """Leave-one-design-out CV evaluated with ranking metrics."""
     designs = df["design"].unique()
     if len(designs) < 2:
         return None

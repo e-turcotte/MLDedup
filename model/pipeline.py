@@ -15,11 +15,7 @@ def fit_pipeline(X, y):
 
 
 def extract_raw_coefficients(pipe, feature_cols):
-    """Convert standardized coefficients to raw-feature space for deployment.
-
-    raw_coef[i] = std_coef[i] / sigma[i]
-    raw_intercept = std_intercept - sum(std_coef[i] * mu[i] / sigma[i])
-    """
+    """Convert standardized coefficients to raw-feature space for deployment."""
     scaler = pipe.named_steps["standardscaler"]
     model = pipe.named_steps["linearregression"]
     raw_coefs = model.coef_ / scaler.scale_

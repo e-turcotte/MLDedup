@@ -39,11 +39,7 @@ def ndcg_at_k(true_order, pred_order, k=1):
 
 
 def ranking_report(df, speedup_col, group_cols):
-    """Compute per-group NDCG@1 and Kendall's tau.
-
-    Returns a dict with keys ``ndcg1_scores``, ``tau_scores``,
-    ``mean_ndcg1``, and ``mean_tau``.
-    """
+    """Compute per-group NDCG@1 and Kendall's tau."""
     ndcg1_scores = []
     tau_scores = []
 
