@@ -12,4 +12,7 @@ utils/bin/essent.jar
 # IDE related
 .idea/*
 .bsp/
+
+# Python related
+__pycache__/
 .venv/
