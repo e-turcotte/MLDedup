@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.model_selection import GroupKFold, KFold, cross_validate
 
-from metrics import ndcg_at_k
+from metrics import hit_at_k
 from pipeline import build_pipeline
 
 from scipy.stats import kendalltau
@@ -16,13 +16,17 @@ def regression_cv(X, y, groups=None):
         "r2": "r2",
         "neg_mae": "neg_mean_absolute_error",
         "neg_mse": "neg_mean_squared_error",
+        "neg_median_ae": "neg_median_absolute_error",
     }
 
     if n_samples >= 3 and n_groups >= 2:
-        n_splits = min(5, n_groups)
+        n_splits = n_groups
         cv = GroupKFold(n_splits=n_splits)
         splits = list(cv.split(X, y, groups=groups))
-        description = f"Grouped CV by design ({n_splits} folds; tests generalization to unseen designs)"
+        description = (
+            f"Leave-one-design-out grouped CV ({n_splits} folds; "
+            "each fold holds out exactly one design)"
+        )
     elif n_samples >= 5:
         n_splits = min(5, n_samples)
         cv = KFold(n_splits=n_splits, shuffle=True, random_state=0)
@@ -47,6 +51,7 @@ def regression_cv(X, y, groups=None):
         "r2": cv_res["test_r2"],
         "mae": -cv_res["test_neg_mae"],
         "rmse": np.sqrt(-cv_res["test_neg_mse"]),
+        "median_ae": -cv_res["test_neg_median_ae"],
         "description": description,
     }
 
@@ -57,7 +62,7 @@ def ranking_cv_leave_one_design_out(df, feature_cols, group_cols):
     if len(designs) < 2:
         return None
 
-    ndcg1_scores = []
+    hit1_scores = []
     tau_scores = []
 
     for held_out in designs:
@@ -69,16 +74,19 @@ def ranking_cv_leave_one_design_out(df, feature_cols, group_cols):
         test["cv_predicted"] = cv_pipe.predict(test[feature_cols])
 
         for _, group in test.groupby(group_cols):
+            if len(group) < 2:
+                continue
             true_order = group.sort_values("relative_speedup", ascending=False)["rank"].tolist()
             pred_order = group.sort_values("cv_predicted", ascending=False)["rank"].tolist()
-            ndcg1_scores.append(ndcg_at_k(true_order, pred_order, k=1))
+            hit1_scores.append(hit_at_k(true_order, pred_order, k=1))
             tau, _ = kendalltau(true_order, pred_order)
-            tau_scores.append(tau)
+            if not np.isnan(tau):
+                tau_scores.append(tau)
 
     return {
-        "ndcg1_scores": ndcg1_scores,
+        "hit1_scores": hit1_scores,
         "tau_scores": tau_scores,
-        "mean_ndcg1": np.mean(ndcg1_scores),
+        "mean_hit1": np.mean(hit1_scores),
         "mean_tau": np.mean(tau_scores),
         "std_tau": np.std(tau_scores),
     }

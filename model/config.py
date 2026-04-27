@@ -1,11 +1,10 @@
 FEATURE_COLS = [
-    "instance_count",
-    "module_ir_size",
-    "boundary_signal_count",
     "boundary_to_interior_ratio",
-    "edge_count_within",
-    "fraction_design_covered",
-    "original_ir_size",
+    "log_original_ir_size",
+    "instance_count",
+    "boundary_ratio_x_instance_count",
+    "has_boundary",
+    "instance_count_x_log_module_ir_size",
 ]
 
 # Groups for training dataset - determines cross-validation rows

@@ -4,6 +4,7 @@ import pandas as pd
 
 from config import FEATURE_COLS, TARGET_COL
 from cross_validation import regression_cv
+from data import load_and_prepare
 from metrics import dummy_baseline_mae, regression_report
 from pipeline import export_coefficients, extract_raw_coefficients, fit_pipeline
 
@@ -14,7 +15,7 @@ if len(sys.argv) != 3:
 input_csv = sys.argv[1]
 output_csv = sys.argv[2]
 
-df = pd.read_csv(input_csv)
+df = load_and_prepare(input_csv)
 
 X = df[FEATURE_COLS]
 y = df[TARGET_COL]
@@ -42,7 +43,15 @@ print(f"Dummy (mean y) MAE = {baseline_mae:.6f}  (baseline; lower is better)")
 model = pipe.named_steps["linearregression"]
 print("\n--- Standardized coefficients (per-σ effect on relative_speedup) ---")
 for name, coef in zip(FEATURE_COLS, model.coef_):
-    print(f"  {name}: {coef:.10f}")
+    direction = "positive (helps)" if coef > 0 else "negative (hurts)"
+    print(f"  {name:>35s}: {coef:+.10f}  [{direction}]")
+
+# --- Feature–target correlations --------------------------------------------
+
+print(f"\n--- Feature–target Pearson correlation ---")
+for col in FEATURE_COLS:
+    r = df[col].corr(df[TARGET_COL])
+    print(f"  {col:>35s}: {r:+.4f}")
 
 # --- Cross-validation -------------------------------------------------------
 
@@ -51,9 +60,10 @@ cv_result = regression_cv(X, y, groups)
 
 if cv_result is not None:
     print(f"\n--- {cv_result['description']} ---")
-    print(f"R²   : {cv_result['r2'].mean():.6f} ± {cv_result['r2'].std():.6f}")
-    print(f"MAE  : {cv_result['mae'].mean():.6f} ± {cv_result['mae'].std():.6f}")
-    print(f"RMSE : {cv_result['rmse'].mean():.6f} ± {cv_result['rmse'].std():.6f}")
+    print(f"R²             : {cv_result['r2'].mean():.6f} ± {cv_result['r2'].std():.6f}")
+    print(f"MAE            : {cv_result['mae'].mean():.6f} ± {cv_result['mae'].std():.6f}")
+    print(f"RMSE           : {cv_result['rmse'].mean():.6f} ± {cv_result['rmse'].std():.6f}")
+    print(f"Median |error| : {cv_result['median_ae'].mean():.6f} ± {cv_result['median_ae'].std():.6f}")
 else:
     print("\n--- CV skipped (need ≥3 rows and ≥2 designs for grouped CV, or ≥5 rows for KFold) ---")
 

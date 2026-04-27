@@ -916,7 +916,31 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, circuit: Circuit) extends L
       val (dedupMod, dedupInstances, dedupBenefit, rankUsed) = if (opt.mlRank) {
         val coeffs = MLRankModel.loadCoefficients().getOrElse(
           throw new RuntimeException("--ml-rank requires coefficients in META-INF/ml-rank-coefficients.csv"))
-        val candidateNames = benefitSortedNames.filter(m => modInstanceCount(m) > 1)
+        // Out-of-distribution guards. Two layers, both motivated by training/deploy mismatch:
+        //   1. Size floor: the training set's smallest module had module_ir_size = 4. Without this
+        //      filter the model happily picks a 0-node wrapper (e.g. Queue_43 in rocket21-1c)
+        //      because hasBoundary=0 and boundary_to_interior_ratio=0 both look like "no dedup tax"
+        //      to the model — it has no feature for "no content = no benefit either".
+        //   2. Top-N by heuristic benefit: the training sweep used baked-in ranks 1..10 only
+        //      (see line 935 below: `rankFromResource max 1 min 10 min numModules`), so the model
+        //      has never seen a module beyond rank 10. At deploy time we'd otherwise score every
+        //      multiply-instantiated module, which lets tiny rank-15+ wrappers slip in (e.g.
+        //      IntSyncCrossingSource_5 with module_ir_size=5 winning over TLB with size=323
+        //      simply because their boundary ratio is smaller). Capping candidates at the
+        //      training rank ceiling forces the model to choose among modules it actually saw.
+        val MinModuleIRSize = 4
+        val MaxRankCandidates = 10
+        val sizeFiltered = benefitSortedNames.filter { m =>
+          val keep = modInstanceCount(m) > 1 && modInstInfo.internalModIRSize(m) >= MinModuleIRSize
+          if (!keep && modInstanceCount(m) > 1)
+            logger.info(s"ML candidate filter: skipping [$m] (module_ir_size=${modInstInfo.internalModIRSize(m)} < $MinModuleIRSize)")
+          keep
+        }
+        val candidateNames = sizeFiltered.take(MaxRankCandidates)
+        if (sizeFiltered.size > MaxRankCandidates) {
+          val dropped = sizeFiltered.drop(MaxRankCandidates)
+          logger.info(s"ML candidate filter: capping to top $MaxRankCandidates by benefit; dropping ${dropped.size} lower-rank modules: ${dropped.mkString(", ")}")
+        }
         if (candidateNames.isEmpty) {
           ("", Seq.empty[String], 0, 0)
         } else {

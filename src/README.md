@@ -27,8 +27,8 @@ Houses all ML inference logic, fully self-contained.
 
 | Component | Description |
 |-----------|-------------|
-| `ModuleFeatures` | Case class holding the 7 numeric features (`instanceCount`, `moduleIRSize`, `boundarySignalCount`, `boundaryToInteriorRatio`, `edgeCountWithin`, `fractionDesignCovered`, `originalIRSize`). The field order in `toArray` matches the Python `FEATURE_COLS` and the coefficients CSV column order. |
-| `loadCoefficients()` | Reads `META-INF/ml-rank-coefficients.csv` from the classpath. Expects a header row and one data row with `intercept` followed by the 7 feature weights. Returns `Option[Array[Double]]`. |
+| `ModuleFeatures` | Case class holding the 5 engineered features (`boundaryToInteriorRatio`, `logOriginalIRSize`, `instanceCount`, `boundaryRatioXInstanceCount`, `hasBoundary`). The field order in `toArray` matches the Python `FEATURE_COLS` and the coefficients CSV column order. |
+| `loadCoefficients()` | Reads `META-INF/ml-rank-coefficients.csv` from the classpath. Expects a header row and one data row with `intercept` followed by the 5 feature weights. Returns `Option[Array[Double]]`. |
 | `predict(coeffs, features)` | Simple dot product: `intercept + Σ(coeff_i × feature_i)`. No scaling needed at runtime because the Python export step (`pipeline.extract_raw_coefficients`) converts standardized weights to raw-feature space. |
 | `computeFeatures(modName, modInstInfo, sg, originalIRSize)` | Builds a `ModuleFeatures` from the statement graph **before** dedup. Boundary count = number of nodes with at least one edge crossing the instance subgraph boundary (a proxy for the coupling overhead dedup will introduce). |
 | `selectBestModule(candidates, …)` | Scores every candidate module (those with `instanceCount > 1`), takes `maxBy` predicted score, and returns `(bestModuleName, pseudoRank)` where `pseudoRank` is the 1-based position in the old benefit-sorted list — useful for logging and comparing against the heuristic. |
@@ -53,7 +53,7 @@ Three changes in `EssentEmitter.execute`:
 
 3. **`dedup_features.csv` emission** — after the dedup planning phase, writes
    one CSV row next to the compiler output with timestamp, design name, rank
-   used, chosen module, and all 7 features. This row can be merged with
+   used, chosen module, and all 7 raw feature columns. This row can be merged with
    simulation throughput to extend the training dataset.
 
 ### Resource files
@@ -74,7 +74,7 @@ sbt assembly
 
 # The compiler will:
 #   1. Enumerate all multiply-instantiated modules.
-#   2. Compute 7 graph features for each candidate.
+#   2. Compute 5 engineered features for each candidate.
 #   3. Score candidates with the linear model from ml-rank-coefficients.csv.
 #   4. Deduplicate the module with the highest predicted speedup.
 #   5. Write dedup_features.csv alongside the output .h file.

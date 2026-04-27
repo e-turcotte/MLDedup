@@ -1,34 +1,32 @@
 package essent
 
-import essent.Graph.NodeID
 import _root_.logger.LazyLogging
 
 import scala.io.Source
 
 case class ModuleFeatures(
-  instanceCount: Int,
-  moduleIRSize: Int,
-  boundarySignalCount: Int,
   boundaryToInteriorRatio: Double,
-  edgeCountWithin: Int,
-  fractionDesignCovered: Double,
-  originalIRSize: Int
+  logOriginalIRSize: Double,
+  instanceCount: Int,
+  boundaryRatioXInstanceCount: Double,
+  hasBoundary: Int,
+  instanceCountXLogModuleIRSize: Double
 ) {
+  // Order MUST match Python's config.FEATURE_COLS exactly. Append-only when adding features.
   def toArray: Array[Double] = Array(
-    instanceCount.toDouble,
-    moduleIRSize.toDouble,
-    boundarySignalCount.toDouble,
     boundaryToInteriorRatio,
-    edgeCountWithin.toDouble,
-    fractionDesignCovered,
-    originalIRSize.toDouble
+    logOriginalIRSize,
+    instanceCount.toDouble,
+    boundaryRatioXInstanceCount,
+    hasBoundary.toDouble,
+    instanceCountXLogModuleIRSize
   )
 }
 
 object MLRankModel extends LazyLogging {
 
   private val ResourcePath = "META-INF/ml-rank-coefficients.csv"
-  private val NumFeatures = 7
+  private val NumFeatures = 6
 
   /** 
    * Load the coefficients from the resource CSV file.
@@ -38,7 +36,7 @@ object MLRankModel extends LazyLogging {
   def loadCoefficients(): Option[Array[Double]] = {
     Option(getClass.getClassLoader.getResourceAsStream(ResourcePath)).flatMap { in =>
       try {
-        val lines = Source.fromInputStream(in).getLines().toSeq
+        val lines = Source.fromInputStream(in).getLines().toList
         in.close()
         if (lines.size < 2) {
           logger.error(s"Coefficients file $ResourcePath must have a header row and a data row")
@@ -92,32 +90,29 @@ object MLRankModel extends LazyLogging {
   ): ModuleFeatures = {
     val instances = modInstInfo.internalModInstanceTable(modName)
     val instanceCount = instances.size
-    val moduleIRSize = modInstInfo.internalModIRSize(modName)
-    val fractionDesignCovered = (instanceCount * moduleIRSize).toDouble / originalIRSize
 
     val instanceNodeSet = modInstInfo.instInclusiveNodesTable(instances.head).toSet
 
-    val edgeCountWithin = instanceNodeSet.toSeq.map { nid =>
-      sg.outNeigh(nid).count(instanceNodeSet.contains)
-    }.sum
-
-    // A statement-graph node is "boundary" if it has an edge to/from outside the instance's
-    // subgraph — proxy for cross-instance coupling cost before any dedup transform is applied.
     val boundarySignalCount = instanceNodeSet.toSeq.count { nid =>
       sg.outNeigh(nid).exists(!instanceNodeSet.contains(_)) ||
       sg.inNeigh(nid).exists(!instanceNodeSet.contains(_))
     }
 
+    val moduleIRSize = modInstInfo.internalModIRSize(modName)
     val boundaryToInteriorRatio = boundarySignalCount.toDouble / originalIRSize
+    val logOriginalIRSize = Math.log(originalIRSize.toDouble)
+    val boundaryRatioXInstanceCount = boundaryToInteriorRatio * instanceCount
+    val hasBoundary = if (boundarySignalCount > 0) 1 else 0
+    // +1 mirrors Python data.py and keeps log defined when module_ir_size == 0
+    val instanceCountXLogModuleIRSize = instanceCount * Math.log(moduleIRSize.toDouble + 1.0)
 
     ModuleFeatures(
-      instanceCount = instanceCount,
-      moduleIRSize = moduleIRSize,
-      boundarySignalCount = boundarySignalCount,
       boundaryToInteriorRatio = boundaryToInteriorRatio,
-      edgeCountWithin = edgeCountWithin,
-      fractionDesignCovered = fractionDesignCovered,
-      originalIRSize = originalIRSize
+      logOriginalIRSize = logOriginalIRSize,
+      instanceCount = instanceCount,
+      boundaryRatioXInstanceCount = boundaryRatioXInstanceCount,
+      hasBoundary = hasBoundary,
+      instanceCountXLogModuleIRSize = instanceCountXLogModuleIRSize
     )
   }
 
@@ -144,7 +139,7 @@ object MLRankModel extends LazyLogging {
     val scored = candidates.map { modName =>
       val features = computeFeatures(modName, modInstInfo, sg, originalIRSize)
       val score = predict(coeffs, features)
-      logger.info(f"ML score for [$modName]: $score%.6f  (instances=${features.instanceCount}, irSize=${features.moduleIRSize}, boundary=${features.boundarySignalCount}, coverage=${features.fractionDesignCovered}%.4f)")
+      logger.info(f"ML score for [$modName]: $score%.6f  (instances=${features.instanceCount}, boundaryRatio=${features.boundaryToInteriorRatio}%.6f, hasBoundary=${features.hasBoundary}, instCountXLogSize=${features.instanceCountXLogModuleIRSize}%.4f)")
       (modName, score)
     }
 

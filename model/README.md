@@ -38,13 +38,14 @@ designs, it should not be deployed. This comparison is the central output of
 
 | File | Purpose |
 |------|---------|
-| `config.py` | Defines `FEATURE_COLS` (the 7 graph-level features), `GROUP_COLS` (design / benchmark / parallel_cpus — used to group rows during cross-validation and ranking evaluation), and `TARGET_COL` (`relative_speedup`). |
+| `config.py` | Defines `FEATURE_COLS` (the 6 model features, a mix of raw and engineered columns), `GROUP_COLS` (design / benchmark / parallel_cpus — used to group rows during cross-validation and ranking evaluation), and `TARGET_COL` (`relative_speedup`). |
 | `pipeline.py` | Builds a scikit-learn pipeline of `StandardScaler` → `LinearRegression`. Provides `extract_raw_coefficients` to convert standardized weights back to raw-feature space, and `export_coefficients` to write a two-line CSV (header + values) that the Scala `MLRankModel.loadCoefficients()` can parse directly. |
-| `metrics.py` | Regression metrics (`R²`, MAE, RMSE, median AE) plus ranking metrics (`ndcg_at_k` — top-k overlap, and `ranking_report` which computes per-group NDCG@1 and Kendall's τ). Also provides `dummy_baseline_mae` (predict-the-mean) for sanity checking. |
+| `data.py` | Shared `load_and_prepare(csv_path)` function that reads the CSV and computes engineered features (`log_original_ir_size`, `boundary_ratio_x_instance_count`, `has_boundary`, `instance_count_x_log_module_ir_size`) from raw columns. Both scripts import this to guarantee identical data preparation. |
+| `metrics.py` | Regression metrics (`R²`, MAE, RMSE, median AE) plus ranking metrics (`hit_at_k` — top-k set overlap, and `ranking_report` which computes per-group Hit@1 and Kendall's τ). Also provides `dummy_baseline_mae` (predict-the-mean) for sanity checking. |
 | `cross_validation.py` | `regression_cv`: Grouped k-fold CV by design when ≥ 2 designs exist, otherwise plain k-fold. `ranking_cv_leave_one_design_out`: Hold one design out at a time, refit, predict, and compute ranking metrics on the held-out groups — the most honest estimate of generalisation to an unseen design. |
 | `train_and_evaluate.py` | **CLI entry point for training.** Usage: `python train_and_evaluate.py <input_csv> <output_csv>`. Fits on the full dataset, prints in-sample regression metrics plus CV results, then writes the raw-space coefficient CSV that should be copied into `src/main/resources/META-INF/ml-rank-coefficients.csv`. |
-| `evaluate_ranking.py` | **CLI entry point for ranking evaluation.** Usage: `python evaluate_ranking.py <input_csv>`. Compares the heuristic ranking (benefit order) against the ML model on NDCG@1 and Kendall's τ, both in-sample and via leave-one-design-out CV. |
-| `regression_dataset.csv` | Example / working training data. Each row is one (design, rank, benchmark, parallel_cpus) tuple with the 7 features and `relative_speedup` label collected from actual simulation runs. |
+| `evaluate_ranking.py` | **CLI entry point for ranking evaluation.** Usage: `python evaluate_ranking.py <input_csv>`. Compares the heuristic ranking (benefit order) against the ML model on Hit@1 and Kendall's τ, both in-sample and via leave-one-design-out CV. Also prints a per-group diagnostic showing which module was actually best vs. what the model and heuristic picked. |
+| `regression_dataset.csv` | Example / working training data. Each row is one (design, rank, benchmark, parallel_cpus) tuple with the 7 raw columns (from which the 6 model features are derived) and `relative_speedup` label collected from actual simulation runs. |
 
 ## Metrics glossary
 
@@ -93,14 +94,20 @@ In practice the compiler does not need an exact speedup number — it needs to
 pick the **best** module from a set of candidates. Ranking metrics measure
 selection quality directly.
 
-**NDCG@k (normalised discounted cumulative gain at k)** — Compares the top-*k*
-items in the predicted ranking against the top-*k* items in the true ranking.
-For k = 1 (the default in this project), it reduces to a simple question: *did
-the model's #1 pick match the truly best module?* The score is 1 if yes, 0 if
-no, averaged over all groups. *In this project:* NDCG@1 is the most
-decision-relevant metric. An NDCG@1 of 0.80 means the model picks the optimal
-module in 80% of (design, benchmark, parallel_cpus) groups. The compiler only
-deduplicates its top pick, so getting position #1 right is what matters most.
+**Hit@k (top-k set overlap)** — Measures the fraction of top-*k* items shared
+between the predicted ranking and the true ranking. For k = 1 (the default in
+this project), it reduces to a simple question: *did the model's #1 pick match
+the truly best module?* The score is 1 if yes, 0 if no, averaged over all
+groups. *In this project:* Hit@1 is the most decision-relevant metric. A Hit@1
+of 0.80 means the model picks the optimal module in 80% of (design, benchmark,
+parallel_cpus) groups. The compiler only deduplicates its top pick, so getting
+position #1 right is what matters most.
+
+*Note:* for k = 1, Hit@1 is numerically equivalent to NDCG@1 (the true
+discounted cumulative gain formulation). For k > 1 they differ — NDCG accounts
+for the position of each relevant item via a logarithmic discount, while Hit@k
+only counts overlap. Since this project uses k = 1 exclusively, either name
+would be correct, but "hit" better describes what the function computes.
 
 **Kendall's τ (tau)** — A rank-correlation coefficient measuring agreement
 between two orderings. It counts the number of concordant vs. discordant pairs:
@@ -128,11 +135,11 @@ the heuristic's original ordering.
 
 **What the ML model does differently.** Instead of ranking by IR-node removal,
 the ML model predicts `relative_speedup` for each candidate module using the
-7 structural features, then ranks by predicted speedup (highest first). The
+5 structural features, then ranks by predicted speedup (highest first). The
 module with the highest predicted speedup is the ML model's pick.
 
 **The three-level comparison.** `evaluate_ranking.py` prints results in three
-blocks, each computing NDCG@1 and Kendall's τ:
+blocks, each computing Hit@1 and Kendall's τ:
 
 1. **Heuristic baseline** — ranking metrics using the `rank` column as the
    predicted ordering. This is the status quo: how often does the current
@@ -145,12 +152,12 @@ blocks, each computing NDCG@1 and Kendall's τ:
    realistic estimate of how the ML model will perform in production.
 
 **Reading the "gap" output.** At the end, the script prints the difference
-`ML metric − heuristic metric` for both NDCG@1 and Kendall's τ. A positive
+`ML metric − heuristic metric` for both Hit@1 and Kendall's τ. A positive
 gap means the ML model outperforms the heuristic; a negative gap means it is
 worse. For example:
 
 ```
-NDCG@1 gap (ML - heuristic) = +0.0833
+Hit@1 gap (ML - heuristic) = +0.0833
 Tau gap    (ML - heuristic) = +0.4926
 ```
 
@@ -160,7 +167,7 @@ heuristic, and its full ordering correlates much better with reality (τ gap of
 positive, the ML model is expected to outperform the heuristic on new, unseen
 designs.
 
-**When to deploy.** If the CV NDCG@1 gap is positive (or at least zero) and
+**When to deploy.** If the CV Hit@1 gap is positive (or at least zero) and
 the CV Kendall's τ gap is positive, the ML model is an improvement and the
 exported coefficients should be deployed. If the CV gaps are negative, the
 heuristic is still better and the model needs more training data or different
@@ -195,25 +202,54 @@ never trained on, will the model still rank its modules correctly?"
 The gap between in-sample and CV metrics reveals overfitting. If in-sample R²
 is 0.99 but CV R² is 0.2, the model has memorised the training data and will
 not generalise. For a low-capacity model like `StandardScaler` +
-`LinearRegression` with only 7 features, this gap is usually small — but
+`LinearRegression` with only 5 features, this gap is usually small — but
 checking it is essential before deploying new coefficients.
 
 ## Features (shared with Scala `ModuleFeatures`)
 
-All features are computed **before** the dedup transform is applied, using the
-statement graph and module-instance tables already available in the compiler.
-Each one captures a different aspect of *why* deduplicating a particular module
-might (or might not) produce faster simulation.
+The raw dataset (`regression_dataset.csv`) contains 7 columns describing the
+candidate module and its surrounding design. The model does **not** use all of
+them directly — `data.py` engineers four derived features from the raw columns,
+and `config.py` selects the final 6 that enter the `StandardScaler` →
+`LinearRegression` pipeline. The Scala `ModuleFeatures` case class mirrors these
+6 features exactly.
 
-| Feature | Definition | Why it matters |
-|---------|------------|----------------|
-| `instance_count` | Number of instances of the candidate module in the design. | More instances means more code sharing from dedup, but also more dispatcher overhead at runtime. The relationship with speedup is non-linear. |
-| `module_ir_size` | Number of IR statements inside one instance of the module. | Larger modules offer more code to share but are also harder to keep in instruction cache after dedup merges them. |
-| `boundary_signal_count` | Nodes with at least one edge crossing the instance boundary. | A proxy for coupling cost. High boundary counts mean dedup requires more bookkeeping to shuttle data in and out of the shared function, which can negate the code-size savings. |
-| `boundary_to_interior_ratio` | `boundary_signal_count / original_ir_size`. | Normalises boundary cost relative to design size. A module with 100 boundary signals in a 500-node design is much more coupled than the same module in a 50,000-node design. |
-| `edge_count_within` | Total outgoing edges that stay inside the instance subgraph. | Captures internal computational complexity. Modules with dense internal connectivity tend to benefit more from dedup because the shared evaluation function amortises that complexity. |
-| `fraction_design_covered` | `(instance_count × module_ir_size) / original_ir_size`. | What share of the entire design this dedup would affect. Deduplicating a module that covers 60% of the design has a very different impact than one covering 2%. |
-| `original_ir_size` | Total valid IR nodes in the design. | Contextualises all other features. The same absolute boundary count means different things in a small design vs. a large one. |
+### Raw dataset columns
+
+These columns appear in `regression_dataset.csv` and are computed by the Essent
+compiler **before** the dedup transform is applied, using the statement graph
+and module-instance tables.
+
+| Column | Definition |
+|--------|------------|
+| `instance_count` | Number of instances of the candidate module in the design. |
+| `module_ir_size` | Number of IR statements inside one instance of the module. |
+| `boundary_signal_count` | Nodes with at least one edge crossing the instance boundary. |
+| `boundary_to_interior_ratio` | `boundary_signal_count / original_ir_size`. |
+| `edge_count_within` | Total outgoing edges that stay inside the instance subgraph. |
+| `fraction_design_covered` | `(instance_count × module_ir_size) / original_ir_size`. |
+| `original_ir_size` | Total valid IR nodes in the design. |
+
+### Model features (the 6 columns that enter the pipeline)
+
+`data.py` derives four engineered features from the raw columns above, and
+`config.py` selects the final feature set. These are the features that appear
+in the exported coefficient CSV and in the Scala `ModuleFeatures` case class.
+
+> **Ordering invariant.** The order of features in `config.FEATURE_COLS` (Python)
+> must match the order of fields returned by `ModuleFeatures.toArray` (Scala) and
+> the column order produced by `pipeline.export_coefficients`. When adding new
+> features, append to the end of all three to keep the deployed coefficient CSV
+> aligned with the runtime feature vector.
+
+| Feature | Source | Why it matters |
+|---------|--------|----------------|
+| `boundary_to_interior_ratio` | Raw column: `boundary_signal_count / original_ir_size`. | Normalises boundary cost relative to design size. A module with 100 boundary signals in a 500-node design is much more coupled than the same module in a 50,000-node design. |
+| `log_original_ir_size` | Engineered: `log(original_ir_size)`. | Contextualises all other features on a log scale. The same absolute boundary count means different things in a small design vs. a large one; the log transform compresses the wide range of design sizes into a more linear relationship with speedup. |
+| `instance_count` | Raw column. | More instances means more code sharing from dedup, but also more dispatcher overhead at runtime. The relationship with speedup is non-linear. |
+| `boundary_ratio_x_instance_count` | Engineered: `boundary_to_interior_ratio × instance_count`. | An interaction term capturing the total coupling cost across all instances. A high boundary ratio is tolerable for 2 instances but punishing for 10. |
+| `has_boundary` | Engineered: `1` if `boundary_signal_count > 0`, else `0`. | A binary indicator for whether any cross-boundary bookkeeping is needed at all. Modules with zero boundary signals avoid an entire class of overhead. |
+| `instance_count_x_log_module_ir_size` | Engineered: `instance_count * log(module_ir_size + 1)`. | Captures total replicated work — many small instances, a few large ones, and "lots of empty wrappers" all decompose differently here. Empty modules collapse to 0 (since `log(0+1) = 0`) regardless of `instance_count`, which gives the model an explicit signal that "many copies of nothing" is still nothing to gain. The `+1` keeps the log defined when `module_ir_size == 0`. |
 
 ## Typical workflow
 

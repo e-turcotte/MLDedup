@@ -1,2 +1,2 @@
-intercept,instance_count,module_ir_size,boundary_signal_count,boundary_to_interior_ratio,edge_count_within,fraction_design_covered,original_ir_size
-0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+intercept,boundary_to_interior_ratio,log_original_ir_size,instance_count,boundary_ratio_x_instance_count,has_boundary,instance_count_x_log_module_ir_size
+-0.11129363590890895,-8.072878914489179,0.10064050272597777,0.0041186669896569935,2.6301076089325868,-0.0153001523820896,-0.0024600745239779192
